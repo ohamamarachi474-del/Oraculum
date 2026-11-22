@@ -4,6 +4,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { BadRequestException } from '@nestjs/common';
 import { Invoice } from './entities/invoice.entity';
 import { ExportInvoicesProvider } from './providers/export-invoices.provider';
+import { InvoiceStatusTransitionProvider } from './providers/invoice-status-transition.provider';
 import { InvoiceStatus } from './enums/invoice-status.enum';
 import { UserRole } from '../users/enums/userRoles.enum';
 
@@ -119,5 +120,56 @@ describe('ExportInvoicesProvider filters', () => {
         status: 'bogus' as InvoiceStatus,
       }),
     ).rejects.toThrow(BadRequestException);
+  });
+});
+
+describe('InvoiceStatusTransitionProvider', () => {
+  let provider: InvoiceStatusTransitionProvider;
+
+  beforeEach(() => {
+    provider = new InvoiceStatusTransitionProvider();
+  });
+
+  it.each([
+    [InvoiceStatus.PENDING, InvoiceStatus.PAID],
+    [InvoiceStatus.PENDING, InvoiceStatus.VOID],
+    [InvoiceStatus.PAID, InvoiceStatus.VOID],
+  ])('allows %s -> %s', (from, to) => {
+    expect(() => provider.validateTransition(from, to)).not.toThrow();
+    expect(provider.isValidTransition(from, to)).toBe(true);
+  });
+
+  it.each([
+    [InvoiceStatus.PAID, InvoiceStatus.PENDING],
+    [InvoiceStatus.VOID, InvoiceStatus.PENDING],
+    [InvoiceStatus.VOID, InvoiceStatus.PAID],
+  ])('rejects %s -> %s', (from, to) => {
+    expect(() => provider.validateTransition(from, to)).toThrow(BadRequestException);
+    expect(provider.isValidTransition(from, to)).toBe(false);
+  });
+
+  it('treats re-applying the current state as an idempotent no-op', () => {
+    expect(() =>
+      provider.validateTransition(InvoiceStatus.PAID, InvoiceStatus.PAID),
+    ).not.toThrow();
+  });
+
+  it('rejects unknown current or target statuses, even when equal', () => {
+    const bogus = 'bogus' as InvoiceStatus;
+    expect(() => provider.validateTransition(bogus, bogus)).toThrow(BadRequestException);
+    expect(() => provider.validateTransition(bogus, InvoiceStatus.PAID)).toThrow(
+      BadRequestException,
+    );
+    expect(() => provider.validateTransition(InvoiceStatus.PENDING, bogus)).toThrow(
+      BadRequestException,
+    );
+    expect(provider.isValidTransition(bogus, bogus)).toBe(false);
+  });
+
+  it('does not expose the internal transition table for mutation', () => {
+    provider.getAllowedTransitions(InvoiceStatus.VOID).push(InvoiceStatus.PENDING);
+    expect(() =>
+      provider.validateTransition(InvoiceStatus.VOID, InvoiceStatus.PENDING),
+    ).toThrow(BadRequestException);
   });
 });
